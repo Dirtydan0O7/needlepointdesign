@@ -179,11 +179,64 @@
             console.error('Error loading saved designs:', e);
           }
         }
+        
+        // Auto-restore current working state on page load
+        const currentState = localStorage.getItem('needlepoint_current');
+        if (currentState) {
+          try {
+            const state = JSON.parse(currentState);
+            if (state.grid) {
+              setDesignName(state.designName || 'MyDesign');
+              setCanvasCount(state.canvasCount || 13);
+              setGrid(state.grid);
+              setGridWidth(String(state.grid[0]?.length || 26));
+              setGridHeight(String(state.grid.length || 26));
+              if (state.refImage) {
+                setRefImage(state.refImage);
+                setOriginalImageData(state.refImage);
+              }
+              if (state.refImageSize) setRefImageSize(state.refImageSize);
+              if (state.refImagePosition) setRefImagePosition(state.refImagePosition);
+              setLastSavedState(JSON.stringify(state.grid));
+              setHasUnsavedChanges(false);
+            }
+          } catch (e) {
+            console.error('Error restoring current state:', e);
+          }
+        }
       }, []);
+      
+      // Auto-save current working state whenever grid changes
+      useEffect(() => {
+        if (grid) {
+          const currentState = {
+            designName,
+            canvasCount,
+            grid,
+            refImage,
+            refImageSize,
+            refImagePosition,
+            savedAt: new Date().toISOString()
+          };
+          localStorage.setItem('needlepoint_current', JSON.stringify(currentState));
+        }
+      }, [grid, designName, canvasCount, refImage, refImageSize, refImagePosition]);
 
       // Save design to localStorage
       const saveDesign = () => {
         if (!grid) return;
+        
+        // Read existing designs directly from localStorage to avoid stale state
+        let existingDesigns = [];
+        try {
+          const saved = localStorage.getItem('needlepoint_designs');
+          if (saved) {
+            existingDesigns = JSON.parse(saved);
+          }
+        } catch (e) {
+          console.error('Error reading saved designs:', e);
+        }
+        
         const design = {
           id: Date.now(),
           name: designName,
@@ -196,7 +249,9 @@
           refImagePosition,
           savedAt: new Date().toISOString()
         };
-        const updated = [...savedDesigns.filter(d => d.name !== designName), design];
+        
+        // Filter out any existing design with same name, then add new one
+        const updated = [...existingDesigns.filter(d => d.name !== designName), design];
         setSavedDesigns(updated);
         localStorage.setItem('needlepoint_designs', JSON.stringify(updated));
         setLastSavedState(JSON.stringify(grid));
@@ -223,7 +278,18 @@
 
       // Delete saved design
       const deleteDesign = (id) => {
-        const updated = savedDesigns.filter(d => d.id !== id);
+        // Read existing designs directly from localStorage
+        let existingDesigns = [];
+        try {
+          const saved = localStorage.getItem('needlepoint_designs');
+          if (saved) {
+            existingDesigns = JSON.parse(saved);
+          }
+        } catch (e) {
+          console.error('Error reading saved designs:', e);
+        }
+        
+        const updated = existingDesigns.filter(d => d.id !== id);
         setSavedDesigns(updated);
         localStorage.setItem('needlepoint_designs', JSON.stringify(updated));
       };
