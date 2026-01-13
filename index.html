@@ -279,12 +279,18 @@
         setGridHeight(String(design.gridHeight));
         if (design.refImage) {
           setRefImage(design.refImage);
-          setRefImageSize(design.refImageSize);
-          setRefImagePosition(design.refImagePosition);
+          setOriginalImageData(design.refImage);
+          if (design.refImageSize) setRefImageSize(design.refImageSize);
+          if (design.refImagePosition) setRefImagePosition(design.refImagePosition);
+        } else {
+          setRefImage(null);
+          setOriginalImageData(null);
         }
-        setHistory([]);
-        setHistoryIndex(-1);
+        setHistory([JSON.stringify(design.grid)]);
+        setHistoryIndex(0);
         setShowSavedMenu(false);
+        setLastSavedState(JSON.stringify(design.grid));
+        setHasUnsavedChanges(false);
       };
 
       // Delete saved design
@@ -453,30 +459,69 @@
         const file = e.target.files[0];
         if (!file) return;
         const reader = new FileReader();
+        reader.onerror = () => {
+          console.error('Error reading file');
+          alert('Error reading file. Please try again.');
+        };
         reader.onload = (ev) => {
           const img = new Image();
+          img.onerror = () => {
+            console.error('Error loading image');
+            alert('Error loading image. Please try a different file.');
+          };
           img.onload = () => {
-            // Auto-create grid if not exists
-            if (!grid) {
-              const w = Math.min(parseInt(gridWidth) || 26, maxCrosses);
-              const h = Math.min(parseInt(gridHeight) || 26, maxCrosses);
-              if (w >= 1 && h >= 1) {
-                const newGrid = Array(h).fill(null).map(() => Array(w).fill('White'));
-                setGrid(newGrid);
-                setHistory([JSON.stringify(newGrid)]);
-                setHistoryIndex(0);
+            try {
+              // Auto-create grid if not exists
+              if (!grid) {
+                const w = Math.min(parseInt(gridWidth) || 26, maxCrosses);
+                const h = Math.min(parseInt(gridHeight) || 26, maxCrosses);
+                if (w >= 1 && h >= 1) {
+                  const newGrid = Array(h).fill(null).map(() => Array(w).fill('White'));
+                  setGrid(newGrid);
+                  setHistory([JSON.stringify(newGrid)]);
+                  setHistoryIndex(0);
+                }
               }
+              
+              // Compress image to reduce localStorage size
+              // Resize large images to max 800px on longest side
+              const maxDim = 800;
+              let targetWidth = img.width;
+              let targetHeight = img.height;
+              
+              if (img.width > maxDim || img.height > maxDim) {
+                if (img.width > img.height) {
+                  targetWidth = maxDim;
+                  targetHeight = Math.round(img.height * (maxDim / img.width));
+                } else {
+                  targetHeight = maxDim;
+                  targetWidth = Math.round(img.width * (maxDim / img.height));
+                }
+              }
+              
+              // Create canvas to compress image
+              const canvas = document.createElement('canvas');
+              canvas.width = targetWidth;
+              canvas.height = targetHeight;
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+              
+              // Convert to JPEG for smaller size (quality 0.7)
+              const compressedData = canvas.toDataURL('image/jpeg', 0.7);
+              
+              const scale = Math.min(300 / targetWidth, 300 / targetHeight, 1);
+              setRefImageSize({ width: targetWidth * scale, height: targetHeight * scale });
+              setRefImage(compressedData);
+              setOriginalImageData(compressedData);
+              setRefImagePosition({ x: 50, y: 50 });
+              setCropBox({ x: 0, y: 0, w: targetWidth * scale, h: targetHeight * scale });
+              setShowRefImage(true);
+              setIsPositioningImage(true); // Enter positioning mode
+              setActivePanel(null); // Close any open panel
+            } catch (err) {
+              console.error('Error processing image:', err);
+              alert('Error processing image. Please try a different file.');
             }
-            
-            const scale = Math.min(300 / img.width, 300 / img.height, 1);
-            setRefImageSize({ width: img.width * scale, height: img.height * scale });
-            setRefImage(ev.target.result);
-            setOriginalImageData(ev.target.result);
-            setRefImagePosition({ x: 50, y: 50 });
-            setCropBox({ x: 0, y: 0, w: img.width * scale, h: img.height * scale });
-            setShowRefImage(true);
-            setIsPositioningImage(true); // Enter positioning mode
-            setActivePanel(null); // Close any open panel
           };
           img.src = ev.target.result;
         };
@@ -2103,12 +2148,18 @@
           className: 'fixed inset-0 bg-black/50 flex items-center justify-center z-50',
           onClick: (ev) => { if (ev.target === ev.currentTarget) setShowSavedMenu(false); }
         },
-          e('div', { className: 'bg-white rounded-2xl p-6 mx-4 max-w-md w-full shadow-xl max-h-[80vh] flex flex-col' },
+          e('div', { 
+            className: 'bg-white rounded-2xl p-4 mx-4 max-w-md w-full shadow-xl max-h-[80vh] flex flex-col',
+            onClick: (ev) => ev.stopPropagation() // Prevent clicks inside from closing
+          },
             e('div', { className: 'flex justify-between items-center mb-4 shrink-0' },
               e('h2', { className: 'text-xl font-bold text-gray-800 flex items-center gap-2' }, e(FolderIcon), 'Saved Designs'),
-              e('button', { onClick: () => setShowSavedMenu(false), className: 'p-1 text-gray-500 hover:text-gray-700' }, e(XIcon))
+              e('button', { 
+                onClick: () => setShowSavedMenu(false), 
+                className: 'p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-full' 
+              }, e(XIcon))
             ),
-            e('div', { className: 'flex-1 overflow-y-auto' },
+            e('div', { className: 'flex-1 overflow-y-auto min-h-0' },
               savedDesigns.length === 0 ? 
                 e('div', { className: 'text-center py-8 text-gray-400' },
                   e('p', null, 'No saved designs yet.'),
@@ -2117,18 +2168,21 @@
                 e('div', { className: 'space-y-2' },
                   savedDesigns.map(design =>
                     e('div', { key: design.id, className: 'flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100' },
-                      e('div', { className: 'w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center text-amber-600' }, e(GridIcon)),
+                      e('div', { className: 'w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center text-amber-600 shrink-0' }, e(GridIcon)),
                       e('div', { className: 'flex-1 min-w-0' },
                         e('p', { className: 'font-medium truncate' }, design.name),
-                        e('p', { className: 'text-xs text-gray-500' }, `${design.gridWidth}×${design.gridHeight} • ${design.canvasCount}ct`)
+                        e('p', { className: 'text-xs text-gray-500' }, 
+                          `${design.gridWidth}×${design.gridHeight} • ${design.canvasCount}ct` + 
+                          (design.refImage ? ' • 📷' : '')
+                        )
                       ),
                       e('button', { 
                         onClick: () => loadDesign(design), 
-                        className: 'px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-sm font-medium'
+                        className: 'px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-sm font-medium shrink-0'
                       }, 'Load'),
                       e('button', { 
                         onClick: () => { if(confirm('Delete this design?')) deleteDesign(design.id); }, 
-                        className: 'p-1.5 text-red-500 hover:bg-red-50 rounded'
+                        className: 'p-1.5 text-red-500 hover:bg-red-50 rounded shrink-0'
                       }, e(TrashIcon))
                     )
                   )
@@ -2136,8 +2190,8 @@
             ),
             e('div', { className: 'mt-4 pt-4 border-t border-gray-200 shrink-0' },
               e('button', { 
-                onClick: () => { setShowSavedMenu(false); },
-                className: 'w-full py-2 text-gray-600 hover:text-gray-800 text-sm'
+                onClick: () => setShowSavedMenu(false),
+                className: 'w-full py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium'
               }, 'Close')
             )
           )
