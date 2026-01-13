@@ -1101,6 +1101,11 @@
         panOnlyRef.current = panOnly;
       }, [panOnly]);
       
+      const isPositioningRef = useRef(isPositioningImage);
+      useEffect(() => {
+        isPositioningRef.current = isPositioningImage;
+      }, [isPositioningImage]);
+      
       useEffect(() => {
         cellSizeRef.current = cellSize;
       }, [cellSize]);
@@ -1161,6 +1166,9 @@
           // Don't paint if pan-only mode is enabled
           if (panOnlyRef.current) return;
           
+          // Don't paint if in positioning mode
+          if (isPositioningRef.current) return;
+          
           // Don't paint if touching the bottom nav area on mobile (bottom 56px + some buffer)
           if (isMobileRef.current) {
             const touch = e.touches[0];
@@ -1187,12 +1195,12 @@
                 touchInfo,
                 cell: getCellFromTouch(touchInfo),
                 timeout: setTimeout(() => {
-                  // After 80ms with no second finger, commit to painting mode
+                  // After 120ms with no second finger, commit to painting mode
                   if (isPaintingRef.current === 'pending') {
                     isPaintingRef.current = true;
                     setIsPainting(true);
                   }
-                }, 80)
+                }, 120)
               };
             }
           }
@@ -1464,7 +1472,7 @@
                 style: { 
                   left: refImagePosition.x, top: refImagePosition.y, 
                   width: refImageSize.width, height: refImageSize.height, 
-                  zIndex: isPositioningImage ? 10 : 1, 
+                  zIndex: isPositioningImage ? 3 : 1, 
                   cursor: refImageLocked && !isPositioningImage ? 'default' : 'move',
                   pointerEvents: isCropping ? 'none' : 'auto'
                 },
