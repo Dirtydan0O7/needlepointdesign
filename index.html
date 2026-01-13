@@ -139,8 +139,10 @@
       const imgResizeStartRef = useRef({ w: 0, h: 0, x: 0, y: 0 });
       const pinchStartRef = useRef({ distance: 0, zoom: 1, panX: 0, panY: 0, centerX: 0, centerY: 0 });
       const cropStartRef = useRef({ x: 0, y: 0, box: null });
-      const touchStartTimeRef = useRef(null);
-      const pendingPaintRef = useRef(null);
+      // Touch state machine: 'idle' | 'pending' | 'drawing' | 'panning'
+      const touchStateRef = useRef('idle');
+      const touchStartPosRef = useRef({ x: 0, y: 0 });
+      const DRAW_THRESHOLD = 10; // pixels of movement before drawing starts
 
       const cellSize = 18;
       const crossesPerInch = canvasCount;
@@ -1121,6 +1123,7 @@
       }, [grid]);
       
       // Document-level touch handlers for grid painting
+      // State machine: 'idle' -> 'pending' -> 'drawing' or 'panning'
       useEffect(() => {
         const getCellFromTouch = (touch) => {
           const gridEl = gridRef.current;
@@ -1146,96 +1149,84 @@
         };
         
         const handleDocTouchStart = (e) => {
-          // Record touch start time
-          touchStartTimeRef.current = Date.now();
-          
-          // If already 2 touches, cancel any pending paint and don't paint
-          if (e.touches.length === 2) {
-            if (pendingPaintRef.current) {
-              clearTimeout(pendingPaintRef.current);
-              pendingPaintRef.current = null;
-            }
+          // If 2+ touches immediately, go to panning state
+          if (e.touches.length >= 2) {
+            touchStateRef.current = 'panning';
             isPaintingRef.current = false;
             setIsPainting(false);
             return;
           }
           
-          // Don't paint if a mobile panel is open
+          // Don't draw if a mobile panel is open
           if (activePanelRef.current) return;
           
-          // Don't paint if pan-only mode is enabled
+          // Don't draw if pan-only mode is enabled
           if (panOnlyRef.current) return;
           
-          // Don't paint if in positioning mode
+          // Don't draw if in positioning mode
           if (isPositioningRef.current) return;
           
-          // Don't paint if touching the bottom nav area on mobile (bottom 56px + some buffer)
+          // Don't draw if touching the bottom nav area on mobile
           if (isMobileRef.current) {
             const touch = e.touches[0];
-            const bottomNavHeight = 70; // 56px nav + some buffer
+            const bottomNavHeight = 70;
             if (touch.clientY > window.innerHeight - bottomNavHeight) return;
           }
           
           if (e.touches.length === 1 && gridExistsRef.current) {
-            // Check if touch started inside the grid
             if (isInsideGrid(e.touches[0])) {
               e.preventDefault();
-              
-              // Store touch info for potential delayed paint
-              const touchInfo = {
+              // Enter pending state - don't draw yet, wait for movement threshold
+              touchStateRef.current = 'pending';
+              touchStartPosRef.current = {
                 x: e.touches[0].clientX,
-                y: e.touches[0].clientY
-              };
-              
-              // Mark that we're ready to paint (but haven't painted yet)
-              isPaintingRef.current = 'pending';
-              
-              // Store the cell info for tap detection
-              pendingPaintRef.current = {
-                touchInfo,
-                cell: getCellFromTouch(touchInfo),
-                timeout: setTimeout(() => {
-                  // After 120ms with no second finger, commit to painting mode
-                  if (isPaintingRef.current === 'pending') {
-                    isPaintingRef.current = true;
-                    setIsPainting(true);
-                  }
-                }, 120)
+                y: e.touches[0].clientY,
+                cell: getCellFromTouch(e.touches[0])
               };
             }
           }
         };
         
         const handleDocTouchMove = (e) => {
-          // If 2 touches detected during move, cancel painting
-          if (e.touches.length === 2) {
-            if (pendingPaintRef.current?.timeout) {
-              clearTimeout(pendingPaintRef.current.timeout);
+          // If 2+ touches at any point, switch to panning and cancel any drawing
+          if (e.touches.length >= 2) {
+            if (touchStateRef.current === 'pending' || touchStateRef.current === 'drawing') {
+              touchStateRef.current = 'panning';
+              isPaintingRef.current = false;
+              setIsPainting(false);
             }
-            pendingPaintRef.current = null;
-            isPaintingRef.current = false;
-            setIsPainting(false);
             return;
           }
           
-          // If we're in pending state and user starts moving, start painting
-          if (e.touches.length === 1 && isPaintingRef.current === 'pending') {
-            isPaintingRef.current = true;
-            setIsPainting(true);
-            // Paint the first cell now
-            if (pendingPaintRef.current?.cell) {
-              const cell = pendingPaintRef.current.cell;
-              lastPaintedCell.current = `${cell.x},${cell.y}`;
-              paintFnRef.current(cell.x, cell.y);
+          const touch = e.touches[0];
+          
+          // In pending state, check if movement exceeds threshold
+          if (touchStateRef.current === 'pending' && e.touches.length === 1) {
+            const dx = touch.clientX - touchStartPosRef.current.x;
+            const dy = touch.clientY - touchStartPosRef.current.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance >= DRAW_THRESHOLD) {
+              // Movement exceeded threshold with 1 finger - start drawing
+              touchStateRef.current = 'drawing';
+              isPaintingRef.current = true;
+              setIsPainting(true);
+              
+              // Paint the starting cell
+              if (touchStartPosRef.current.cell) {
+                const cell = touchStartPosRef.current.cell;
+                lastPaintedCell.current = `${cell.x},${cell.y}`;
+                paintFnRef.current(cell.x, cell.y);
+              }
             }
           }
           
-          if (e.touches.length === 1 && isPaintingRef.current === true) {
+          // In drawing state, continue painting
+          if (touchStateRef.current === 'drawing' && e.touches.length === 1) {
             e.preventDefault();
-            const cell = getCellFromTouch(e.touches[0]);
+            const cell = getCellFromTouch(touch);
             if (cell) {
               const cellKey = `${cell.x},${cell.y}`;
-              // Only paint if we moved to a new cell
               if (cellKey !== lastPaintedCell.current) {
                 lastPaintedCell.current = cellKey;
                 paintFnRef.current(cell.x, cell.y);
@@ -1245,29 +1236,24 @@
         };
         
         const handleDocTouchEnd = (e) => {
-          // If we were in pending state (tap without drag), paint the cell now
-          if (isPaintingRef.current === 'pending' && pendingPaintRef.current?.cell) {
-            const cell = pendingPaintRef.current.cell;
+          // If was in pending state (tap without enough movement), paint the single cell
+          if (touchStateRef.current === 'pending' && touchStartPosRef.current.cell) {
+            const cell = touchStartPosRef.current.cell;
             paintFnRef.current(cell.x, cell.y);
-            // Save history
             if (currentGridRef.current) {
               saveHistoryRef.current(currentGridRef.current);
             }
           }
           
-          // Clear any pending timeout
-          if (pendingPaintRef.current?.timeout) {
-            clearTimeout(pendingPaintRef.current.timeout);
-          }
-          pendingPaintRef.current = null;
-          
-          if (isPaintingRef.current === true) {
-            // Save history with current grid
+          // If was in drawing state, save history
+          if (touchStateRef.current === 'drawing') {
             if (currentGridRef.current) {
               saveHistoryRef.current(currentGridRef.current);
             }
           }
           
+          // Reset state
+          touchStateRef.current = 'idle';
           isPaintingRef.current = false;
           lastPaintedCell.current = null;
           setIsPainting(false);
@@ -1671,9 +1657,10 @@
                 className: 'absolute', 
                 style: { 
                   zIndex: isPositioningImage ? 5 : (isCropping ? 1.5 : 2),
-                  opacity: isPositioningImage ? 1 : canvasOpacity, 
+                  opacity: isPositioningImage ? 0.35 : canvasOpacity, 
                   left: gridOffset.x, top: gridOffset.y, 
-                  pointerEvents: (isCropping || isPositioningImage) ? 'none' : 'auto'
+                  pointerEvents: (isCropping || isPositioningImage) ? 'none' : 'auto',
+                  transition: 'opacity 0.15s ease'
                 }
               },
                 e('div', {
