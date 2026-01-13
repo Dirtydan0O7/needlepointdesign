@@ -1173,23 +1173,27 @@
             if (isInsideGrid(e.touches[0])) {
               e.preventDefault();
               
-              // Store touch info for delayed paint
+              // Store touch info for potential delayed paint
               const touchInfo = {
                 x: e.touches[0].clientX,
                 y: e.touches[0].clientY
               };
               
-              // Delay painting by 100ms to detect if second finger comes
-              pendingPaintRef.current = setTimeout(() => {
-                pendingPaintRef.current = null;
-                isPaintingRef.current = true;
-                setIsPainting(true);
-                const cell = getCellFromTouch(touchInfo);
-                if (cell) {
-                  lastPaintedCell.current = `${cell.x},${cell.y}`;
-                  paintFnRef.current(cell.x, cell.y);
-                }
-              }, 100);
+              // Mark that we're ready to paint (but haven't painted yet)
+              isPaintingRef.current = 'pending';
+              
+              // Store the cell info for tap detection
+              pendingPaintRef.current = {
+                touchInfo,
+                cell: getCellFromTouch(touchInfo),
+                timeout: setTimeout(() => {
+                  // After 80ms with no second finger, commit to painting mode
+                  if (isPaintingRef.current === 'pending') {
+                    isPaintingRef.current = true;
+                    setIsPainting(true);
+                  }
+                }, 80)
+              };
             }
           }
         };
@@ -1197,16 +1201,28 @@
         const handleDocTouchMove = (e) => {
           // If 2 touches detected during move, cancel painting
           if (e.touches.length === 2) {
-            if (pendingPaintRef.current) {
-              clearTimeout(pendingPaintRef.current);
-              pendingPaintRef.current = null;
+            if (pendingPaintRef.current?.timeout) {
+              clearTimeout(pendingPaintRef.current.timeout);
             }
+            pendingPaintRef.current = null;
             isPaintingRef.current = false;
             setIsPainting(false);
             return;
           }
           
-          if (e.touches.length === 1 && isPaintingRef.current) {
+          // If we're in pending state and user starts moving, start painting
+          if (e.touches.length === 1 && isPaintingRef.current === 'pending') {
+            isPaintingRef.current = true;
+            setIsPainting(true);
+            // Paint the first cell now
+            if (pendingPaintRef.current?.cell) {
+              const cell = pendingPaintRef.current.cell;
+              lastPaintedCell.current = `${cell.x},${cell.y}`;
+              paintFnRef.current(cell.x, cell.y);
+            }
+          }
+          
+          if (e.touches.length === 1 && isPaintingRef.current === true) {
             e.preventDefault();
             const cell = getCellFromTouch(e.touches[0]);
             if (cell) {
@@ -1221,21 +1237,32 @@
         };
         
         const handleDocTouchEnd = (e) => {
-          // Clear any pending paint on touch end
-          if (pendingPaintRef.current) {
-            clearTimeout(pendingPaintRef.current);
-            pendingPaintRef.current = null;
+          // If we were in pending state (tap without drag), paint the cell now
+          if (isPaintingRef.current === 'pending' && pendingPaintRef.current?.cell) {
+            const cell = pendingPaintRef.current.cell;
+            paintFnRef.current(cell.x, cell.y);
+            // Save history
+            if (currentGridRef.current) {
+              saveHistoryRef.current(currentGridRef.current);
+            }
           }
           
-          if (isPaintingRef.current) {
-            isPaintingRef.current = false;
-            lastPaintedCell.current = null;
+          // Clear any pending timeout
+          if (pendingPaintRef.current?.timeout) {
+            clearTimeout(pendingPaintRef.current.timeout);
+          }
+          pendingPaintRef.current = null;
+          
+          if (isPaintingRef.current === true) {
             // Save history with current grid
             if (currentGridRef.current) {
               saveHistoryRef.current(currentGridRef.current);
             }
-            setIsPainting(false);
           }
+          
+          isPaintingRef.current = false;
+          lastPaintedCell.current = null;
+          setIsPainting(false);
         };
         
         // Attach to document so they persist through re-renders
