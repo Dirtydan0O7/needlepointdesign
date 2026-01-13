@@ -85,6 +85,9 @@
       // Image positioning mode
       const [isPositioningImage, setIsPositioningImage] = useState(false);
       
+      // Flag to prevent auto-save during initial load
+      const isInitializingRef = useRef(true);
+      
       // Update isMobile on resize
       useEffect(() => {
         const handleResize = () => setIsMobile(window.innerWidth < 769);
@@ -204,10 +207,18 @@
             console.error('Error restoring current state:', e);
           }
         }
+        
+        // Mark initialization as complete after a short delay
+        setTimeout(() => {
+          isInitializingRef.current = false;
+        }, 100);
       }, []);
       
       // Auto-save current working state whenever grid changes
       useEffect(() => {
+        // Skip auto-save during initialization to prevent overwriting restored state
+        if (isInitializingRef.current) return;
+        
         if (grid) {
           const currentState = {
             designName,
@@ -452,7 +463,8 @@
               if (w >= 1 && h >= 1) {
                 const newGrid = Array(h).fill(null).map(() => Array(w).fill('White'));
                 setGrid(newGrid);
-                saveHistory(newGrid);
+                setHistory([JSON.stringify(newGrid)]);
+                setHistoryIndex(0);
               }
             }
             
