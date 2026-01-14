@@ -584,28 +584,61 @@
       // Symbol mapping for pattern
       const SYMBOLS = ['●', '■', '▲', '◆', '★', '○', '□', '△', '◇', '☆', '✦', '✧', '⬟'];
 
+      // Color code mapping for compact JSON export
+      const COLOR_CODES = {
+        'White': 'W',
+        'Black': 'K',
+        'Red': 'R',
+        'Orange': 'O',
+        'Yellow': 'Y',
+        'LimeGreen': 'L',
+        'DarkGreen': 'G',
+        'Brown': 'B',
+        'Cream': 'C',
+        'Blue': 'U',
+        'DarkBlue': 'D',
+        'Pink': 'P',
+        'Gray': 'A'
+      };
+
       const exportJSON = () => {
         if (!grid) return;
+        
+        // Find all colors actually used in the grid
+        const usedColorNames = new Set();
+        grid.forEach(row => row.forEach(color => usedColorNames.add(color)));
+        
+        // Build palette array and colors object with single-char codes
+        const palette = [];
+        const colors = {};
+        usedColorNames.forEach(colorName => {
+          const code = COLOR_CODES[colorName] || colorName.charAt(0).toUpperCase();
+          palette.push(code);
+          colors[code] = PALETTE[colorName]?.hex || '#ffffff';
+        });
+        
+        // Convert grid to compact string format (newline-separated rows of single chars)
+        const gridString = grid.map(row => 
+          row.map(colorName => COLOR_CODES[colorName] || colorName.charAt(0).toUpperCase()).join('')
+        ).join('\n');
+        
+        // Build optimized v3 JSON
         const data = {
-          version: "2.1",
-          design_name: designName,
-          canvas_count: canvasCount,
-          crosses_per_inch: crossesPerInch,
-          design_width_crosses: grid[0].length,
-          design_height_crosses: grid.length,
-          design_width_inches: (grid[0].length / crossesPerInch).toFixed(2),
-          design_height_inches: (grid.length / crossesPerInch).toFixed(2),
-          colors_used: Object.keys(usedColors).filter(c => usedColors[c] > 0),
-          color_counts: usedColors,
-          palette: PALETTE,
-          grid: grid,
-          created_at: new Date().toISOString(),
+          v: 3,
+          name: designName.replace(/[^a-zA-Z0-9]/g, ''),
+          ct: canvasCount,
+          w: grid[0].length,
+          h: grid.length,
+          palette: palette,
+          colors: colors,
+          grid: gridString
         };
+        
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = designName + '_needlepoint.json';
+        a.download = designName.replace(/[^a-zA-Z0-9]/g, '') + '_needlepoint.json';
         a.click();
         URL.revokeObjectURL(url);
         setShowDownloadMenu(false);
